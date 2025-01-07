@@ -20,6 +20,20 @@ type Transaction struct {
 }
 
 
+type TransactionAnalysis struct {
+
+	TxID          string
+	Time          time.Time
+	Type          string
+	Amount        float64
+	PriceAtTime   float64
+	CurrentPrice  float64
+	ValueAtTime   float64
+	CurrentValue  float64
+	ProfitLoss    float64
+	ProfitLossPct float64
+}
+
 
 
 type WalletResponse struct {
@@ -32,6 +46,15 @@ type WalletResponse struct {
 }
 
 
+type HistoricalPrice struct {
+
+	Time int64  `json:"time"`
+	Usd float64  `json:"USD"`
+	Ksh float64 `json:"KSH"`
+	
+	
+	
+}
 
 
 type Amount float64
@@ -39,6 +62,7 @@ type Amount float64
 
 
 
+//Responsible for getting transactions associated with the wallet
 func fetchTransactions(address string) (*WalletResponse, error) {
 	url := fmt.Sprintf("https://blockchain.info/rawaddr/%s", address)
 	resp, err := http.Get(url)
@@ -63,7 +87,7 @@ func fetchTransactions(address string) (*WalletResponse, error) {
 
 
 
-
+//Get the amount of btc transacted in the btc
 func getTransactionAmount(address, txid string) (*Amount, error) {
 	url := fmt.Sprintf("https://blockchain.info/q/txresult/%s/%s", txid, address)
 	resp, err := http.Get(url)
@@ -89,7 +113,7 @@ func getTransactionAmount(address, txid string) (*Amount, error) {
 
 
 
-
+//Function to monitor wallet
 func monitorWallet(address string, interval int) {
 	var previousBalance float64
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
@@ -113,7 +137,66 @@ func monitorWallet(address string, interval int) {
 
 
 
+//Get the price 
 
+
+func GetPrice(timestamp int64) (*HistoricalPrice , error) {
+
+ 
+	//Convert to utcccc why?? Api 
+	date := time.Unix(timestamp, 0).UTC().Format("02-01-2006")
+	
+	url := fmt.Sprintf("https://min-api.cryptocompare.com/data/v2/histoday?fsym=BTC&tsym=USD&limit=1&toTs=%d", timestamp)
+	
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch historical price data: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse the response
+	var response struct {
+		Data struct {
+			Data []struct {
+				Time int64   `json:"time"`
+				USD  float64 `json:"close"`
+			} `json:"Data"`
+		} `json:"Data"`
+	}
+
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, err
+	}
+
+	if len(response.Data.Data) == 0 {
+		return nil, fmt.Errorf("no historical data available for date %s", date)
+	}
+
+	// Create HistoricalPrice object
+	price := &HistoricalPrice{
+		Time: timestamp,
+		Usd:  response.Data.Data[0].USD,
+	}
+
+	return price, nil
+}
+
+
+
+
+
+
+
+
+
+
+
+//Analyze transaction pattern find the day which most trasanction happened 
 func analyzeTransactionPatterns(transactions []Transaction, address string) {
 	//Get the day the transaction happened
 	dailyTxCount := make(map[string]int)
@@ -138,7 +221,7 @@ func analyzeTransactionPatterns(transactions []Transaction, address string) {
 }
 
 
-//Save to c
+
 
 func main() {
 	address := flag.String("wallet", "", "Bitcoin wallet address to monitor")
@@ -174,14 +257,22 @@ func main() {
 
         t := time.Unix(int64(tx.Time), 0)
 
+		price_test,err := GetPrice(int64(tx.Time)) 
+
+		fmt.Println(price_test)
+
 		formattedTime := t.Format("2006-01-02 15:04:05")
 
 
-		fmt.Printf("TxID: %s, Amount: %.8f BTC, Confirmations: %d, Time: %s\n",
-			tx.TxID, float64(*amount)/100_000_000, tx.Confirmations, formattedTime)
+		fmt.Printf("TxID: %s, Amount: %.8f BTC, Confirmations: %d, Time: %s, BTC Price: %.2f USD\n",
+               tx.TxID, float64(*amount)/100_000_000, tx.Confirmations, formattedTime, price_test.Usd)
+	
 	}
 
 	analyzeTransactionPatterns(walletResponse.Transactions,*address)
+
+
+	
 
 	
 	
