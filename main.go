@@ -10,8 +10,9 @@ import (
 	"time"
 	"math"
     "io"
+	"strings"
     "database/sql"
-	"sort"
+	//"sort"
     _ "github.com/mattn/go-sqlite3"
 	
 )
@@ -26,10 +27,26 @@ const (
 	Headers = "\033[1;36m" 
 )
 
+
+type Input struct {
+    PrevOut struct {
+        Addr  string `json:"addr"`
+        Value int64  `json:"value"`
+    } `json:"prev_out"`
+}
+
+type Output struct {
+    Addr   string `json:"addr"`
+    Value  int64  `json:"value"`
+    Spent  bool   `json:"spent"`
+}
 type Transaction struct {
 	TxID          string `json:"hash"`
 	Confirmations int    `json:"confirmations"`
 	Time          int    `json:"time"`
+	Inputs        []Input `json:"inputs"` 
+    Out           []Output `json:"out"`
+
 }
 
 type WalletResponse struct {
@@ -47,11 +64,16 @@ type HistoricalPrice struct {
 	CurrentPrice float64
 }
 
+
+
+
+
+
 type Amount float64
 
-type Price struct {
-	Usd float64
-}
+type wallet float64
+
+
 
 
 type TransactionAnalysis struct {
@@ -69,12 +91,22 @@ type TransactionDetails struct {
 	Price         float64
 	Time          time.Time
 	Confirmations int
+	DisplayOrigin    string
+    DisplayDest      string
+	
 }
 
 var client = &http.Client{
 	Timeout: 10 * time.Second,
 }
 
+
+
+
+
+
+
+//Mainn Fetch wallet with transaction details 
 func fetchWallet(address string) (*WalletResponse, error) {
 	url := fmt.Sprintf("https://blockchain.info/rawaddr/%s/", address)
 	resp, err := client.Get(url)
@@ -99,11 +131,11 @@ var (
 
 
 
-
+//Retrievd price
 func GetPrice(timestamp int64) (*HistoricalPrice , error) {
 
  
-	//Convert to utcccc why?? Api 
+	 
 	date := time.Unix(timestamp, 0).UTC().Format("02-01-2006")
 	
 	url := fmt.Sprintf("https://min-api.cryptocompare.com/data/v2/histoday?fsym=BTC&tsym=USD&limit=1&toTs=%d", timestamp)
@@ -119,7 +151,7 @@ func GetPrice(timestamp int64) (*HistoricalPrice , error) {
 		return nil, err
 	}
 
-	// Parse the response
+
 	var response struct {
 		Data struct {
 			Data []struct {
@@ -137,7 +169,7 @@ func GetPrice(timestamp int64) (*HistoricalPrice , error) {
 		return nil, fmt.Errorf("no historical data available for date %s", date)
 	}
 
-	// Create HistoricalPrice object
+	
 	price := &HistoricalPrice{
 		Time: timestamp,
 		Usd:  response.Data.Data[0].USD,
@@ -152,7 +184,7 @@ func GetPrice(timestamp int64) (*HistoricalPrice , error) {
 
 
 
-
+//Need to remove this 
 func getMidnightTimestamp(timestamp int64) string {
     t := time.Unix(timestamp, 0).UTC()
     midnight := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
@@ -160,14 +192,14 @@ func getMidnightTimestamp(timestamp int64) string {
 }
 
 
-
+//Fallback for price if api limit exhausted 
 func GetPrice2(db *sql.DB, timestamp int64) (*HistoricalPrice, error) {
 	// Convert timestamp to a UTC time string in the same format as the database
 	midnight := getMidnightTimestamp(timestamp)
 
     
 
-	// Query the database
+	
 	query := `
         SELECT price 
 FROM crypto_data 
@@ -215,14 +247,26 @@ func getTransactionAmount(address, txid string) (*Amount, error) {
 
 
 
-
-
 func printTableHeader() {
-	fmt.Printf("\n%s╔════════════════════════════════════════════════════════════════════════════════════════════════════════╗%s\n", Headers, Reset)
-	fmt.Printf("%s║ %-20s │ %-15s │ %-12s │ %-15s │ %-20s ║%s\n",
-		Headers, "Transaction ID", "Amount (BTC)", "Confirmations", "USD Value", "Time", Reset)
-	fmt.Printf("%s╠════════════════════════════════════════════════════════════════════════════════════════════════════════╣%s\n", Headers, Reset)
+    
+    fmt.Printf("\n%s╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗%s\n", Headers, Reset)
+    
+   
+    fmt.Printf("%s║ %-20s │ %-15s │ %-12s │ %-15s │ %-20s │ %-35s │ %-35s ║%s\n",
+        Headers,
+        "Transaction ID",
+        "Amount (BTC)",
+        "Confirmations",
+        "USD Value",
+        "Time",
+        "Origin",
+        "Destination",
+        Reset)
+    
+   
+    fmt.Printf("%s╠═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣%s\n", Headers, Reset)
 }
+
 
 func printWalletSummary(wallet *WalletResponse, currentPrice float64) {
 	balance := float64(wallet.FinalBalance) / 100_000_000
@@ -241,152 +285,278 @@ func printWalletSummary(wallet *WalletResponse, currentPrice float64) {
 
 
 
-func analyzeTransactionPatterns(transactions []Transaction, address string, txDetails map[string]TransactionDetails) {
-    // Initialize analysis maps
-    incomingTx := make(map[string]float64)
-    outgoingTx := make(map[string]float64)
-    sizeCategories := make(map[string]int)
-    repeatedAddresses := make(map[string]int)
-    profitByMonth := make(map[string]float64)
-    
-    // Transaction size clusters
-    var txSizes []float64
-    
-    // Initialize previous maps and variables from before
-   // dailyTxCount := make(map[string]int)
-    monthlyTxCount := make(map[string]int)
-    //hourlyDistribution := make(map[int]int)
-    
-    var totalProfit float64
-    var highestProfit float64
-    var biggestLoss float64
-    var profitableMonths int
-    var unprofitableMonths int
 
-    // Process transactions
+
+
+
+
+func analyzeTransactionPatterns(transactions []Transaction, address string, txDetails map[string]TransactionDetails) {
+    
+    type AddressStats struct {
+        totalTransactions int
+        totalVolume      float64
+        lastSeen         time.Time
+        transactionTypes map[string]int    
+        amounts          []float64         
+        timeDiffs        []float64         
+    }
+
+    addressStats := make(map[string]AddressStats)
+    unusualPatterns := make(map[string][]string)
+    
+
+    const (
+        RAPID_TX_WINDOW    = 1 * time.Hour
+        DORMANCY_PERIOD    = 30 * 24 * time.Hour
+        HIGH_VALUE_THRESHOLD = 1.0 // in BTC
+        UNUSUAL_VARIANCE_THRESHOLD = 2.0
+    )
+
+    
+    rapidTransactions := make(map[time.Time][]string)
+    var lastTxTime time.Time
+    var previousAmounts []float64
+
+    fmt.Printf("\n%s=== Security Analysis Report ===%s\n\n", Headers, Reset)
+
+    
     for _, tx := range transactions {
         details := txDetails[tx.TxID]
         txTime := time.Unix(int64(tx.Time), 0)
-        amount := details.Amount
-        monthKey := txTime.Format("2006-01")
         
-        // Incoming vs Outgoing Analysis
-        if amount > 0 {
-            incomingTx[monthKey] += amount
-        } else {
-            outgoingTx[monthKey] += -amount
+       
+        for _, input := range tx.Inputs {
+            addr := input.PrevOut.Addr
+            if addr == "" {
+                continue
+            }
+            
+            stats := addressStats[addr]
+            stats.totalTransactions++
+            stats.totalVolume += math.Abs(details.Amount)
+            stats.lastSeen = txTime
+            if stats.transactionTypes == nil {
+                stats.transactionTypes = make(map[string]int)
+            }
+            stats.transactionTypes["out"]++
+            stats.amounts = append(stats.amounts, math.Abs(details.Amount))
+            
+            if len(stats.amounts) > 1 {
+                timeDiff := txTime.Sub(lastTxTime).Hours()
+                stats.timeDiffs = append(stats.timeDiffs, timeDiff)
+            }
+            
+            addressStats[addr] = stats
+        }
+
+        for _, output := range tx.Out {
+            addr := output.Addr
+            if addr == "" {
+                continue
+            }
+            
+            stats := addressStats[addr]
+            stats.totalTransactions++
+            stats.totalVolume += math.Abs(details.Amount)
+            stats.lastSeen = txTime
+            if stats.transactionTypes == nil {
+                stats.transactionTypes = make(map[string]int)
+            }
+            stats.transactionTypes["in"]++
+            stats.amounts = append(stats.amounts, math.Abs(details.Amount))
+            
+            addressStats[addr] = stats
+        }
+
+        
+        if !lastTxTime.IsZero() {
+            timeDiff := txTime.Sub(lastTxTime)
+            if timeDiff < RAPID_TX_WINDOW {
+                rapidTransactions[txTime] = append(rapidTransactions[txTime], tx.TxID)
+            }
         }
         
-        // Size Clustering
-        txSizes = append(txSizes, math.Abs(amount))
-        
-        // Categorize transaction sizes
-        switch {
-        case math.Abs(amount) < 0.001:
-            sizeCategories["Micro (<0.001 BTC)"]++
-        case math.Abs(amount) < 0.01:
-            sizeCategories["Small (0.001-0.01 BTC)"]++
-        case math.Abs(amount) < 0.1:
-            sizeCategories["Medium (0.01-0.1 BTC)"]++
-        case math.Abs(amount) < 1:
-            sizeCategories["Large (0.1-1 BTC)"]++
-        default:
-            sizeCategories["Whale (>1 BTC)"]++
+        lastTxTime = txTime
+        previousAmounts = append(previousAmounts, math.Abs(details.Amount))
+    }
+
+   
+    fmt.Printf("%s1. Suspicious Pattern Detection%s\n", Headers, Reset)
+
+    // 1. Detect addresses with unusual transaction patterns
+    for addr, stats := range addressStats {
+        if addr == address {
+            continue // Skip entered wallet address
         }
-        
-        // Calculate profit/loss for this transaction
-        profitImpact := amount * details.Price
-        totalProfit += profitImpact
-        profitByMonth[monthKey] += profitImpact
-        
-        if profitImpact > highestProfit {
-            highestProfit = profitImpact
+
+        // Calculate transaction amount variance
+        var mean, variance float64
+        for _, amount := range stats.amounts {
+            mean += amount
         }
-        if profitImpact < biggestLoss {
-            biggestLoss = profitImpact
+        mean /= float64(len(stats.amounts))
+        
+        for _, amount := range stats.amounts {
+            variance += math.Pow(amount-mean, 2)
+        }
+        variance /= float64(len(stats.amounts))
+        stdDev := math.Sqrt(variance)
+
+        // Suspicious
+        if stdDev > UNUSUAL_VARIANCE_THRESHOLD && stats.totalTransactions > 3 {
+            unusualPatterns[addr] = append(unusualPatterns[addr], 
+                fmt.Sprintf("High variance in transaction amounts (stdDev: %.2f BTC)", stdDev))
+        }
+
+        if stats.totalVolume > HIGH_VALUE_THRESHOLD && stats.totalTransactions < 3 {
+            unusualPatterns[addr] = append(unusualPatterns[addr], 
+                "High volume with few transactions")
+        }
+
+        // Detect unusual timing patterns
+        var avgTimeDiff float64
+        if len(stats.timeDiffs) > 0 {
+            for _, diff := range stats.timeDiffs {
+                avgTimeDiff += diff
+            }
+            avgTimeDiff /= float64(len(stats.timeDiffs))
+            
+            if avgTimeDiff < 1.0 && len(stats.timeDiffs) > 3 {
+                unusualPatterns[addr] = append(unusualPatterns[addr], 
+                    "Unusually frequent transactions")
+            }
         }
     }
 
-    // Print Analysis Results
-    fmt.Printf("\n%s=== Advanced Transaction Analysis ===%s\n\n", Headers, Reset)
-
-    // 1. Transaction Size Clustering
-    fmt.Printf("%sTransaction Size Distribution:%s\n", Headers, Reset)
-    for category, count := range sizeCategories {
-        percentage := float64(count) / float64(len(transactions)) * 100
-        fmt.Printf("├─ %s: %d (%.1f%%)\n", category, count, percentage)
-    }
-    fmt.Printf("\n")
-
-    // 2. Incoming vs Outgoing Analysis
-    fmt.Printf("%sIncoming vs Outgoing Patterns:%s\n", Headers, Reset)
-    for month := range monthlyTxCount {
-        incoming := incomingTx[month]
-        outgoing := outgoingTx[month]
-        if incoming > 0 || outgoing > 0 {
-            fmt.Printf("├─ %s:\n", month)
-            fmt.Printf("│  ├─ Incoming: %.8f BTC\n", incoming)
-            fmt.Printf("│  └─ Outgoing: %.8f BTC\n", outgoing)
-        }
-    }
-    fmt.Printf("\n")
-
-    // 3. Profit Analysis
-    fmt.Printf("%sProfit Analysis:%s\n", Headers, Reset)
-    fmt.Printf("├─ Total Profit/Loss: $%.2f USD\n", totalProfit)
-    fmt.Printf("├─ Highest Single Profit: $%.2f USD\n", highestProfit)
-    fmt.Printf("├─ Biggest Single Loss: $%.2f USD\n", biggestLoss)
-    fmt.Printf("├─ Monthly Profit Breakdown:\n")
     
-    // Sort months for consistent display
-    var months []string
-    for month := range profitByMonth {
-        months = append(months, month)
+    if len(unusualPatterns) > 0 {
+        fmt.Printf("\n%sDetected Suspicious Patterns:%s\n", Yellow, Reset)
+        for addr, patterns := range unusualPatterns {
+            fmt.Printf("Address: %s\n", addr)
+            for _, pattern := range patterns {
+                fmt.Printf("  - %s\n", pattern)
+            }
+            
+            // Print additional stats for suspicious addresses
+            stats := addressStats[addr]
+            fmt.Printf("  Statistics:\n")
+            fmt.Printf("    - Total Transactions: %d\n", stats.totalTransactions)
+            fmt.Printf("    - Total Volume: %.8f BTC\n", stats.totalVolume)
+            fmt.Printf("    - Last Seen: %s\n", stats.lastSeen.Format("2006-01-02 15:04:05"))
+            fmt.Printf("    - Transaction Types: In: %d, Out: %d\n", 
+                stats.transactionTypes["in"], stats.transactionTypes["out"])
+        }
     }
-    sort.Strings(months)
-    
-    for _, month := range months {
-        profit := profitByMonth[month]
-        if profit > 0 {
-            fmt.Printf("│  ├─ %s: %s$%.2f USD%s\n", month, Green, profit, Reset)
-            profitableMonths++
-        } else {
-            fmt.Printf("│  ├─ %s: %s$%.2f USD%s\n", month, Red, profit, Reset)
-            unprofitableMonths++
+
+    // 2. Analyze Temporal Patterns NEEEEDDDDD TO BE REWORKED 
+    fmt.Printf("\n%s2. Temporal Analysis%s\n", Headers, Reset)
+    if len(rapidTransactions) > 0 {
+        fmt.Printf("\n%sRapid Transaction Sequences:%s\n", Yellow, Reset)
+        for timeWindow, txIds := range rapidTransactions {
+            fmt.Printf("Time Window: %s\n", timeWindow.Format("2006-01-02 15:04:05"))
+            fmt.Printf("Number of transactions: %d\n", len(txIds))
+            fmt.Printf("Transaction IDs: %v\n", txIds)
+        }
+    }
+
+    // 3. Volume Analysis
+    fmt.Printf("\n%s3. Volume Analysis%s\n", Headers, Reset)
+    var highValueTxs []string
+    for _, tx := range transactions {
+        details := txDetails[tx.TxID]
+        if math.Abs(details.Amount) > HIGH_VALUE_THRESHOLD {
+            highValueTxs = append(highValueTxs, fmt.Sprintf("TxID: %s, Amount: %.8f BTC", 
+                tx.TxID, math.Abs(details.Amount)))
         }
     }
     
-    fmt.Printf("├─ Profitable Months: %d\n", profitableMonths)
-    fmt.Printf("└─ Unprofitable Months: %d\n\n", unprofitableMonths)
+    if len(highValueTxs) > 0 {
+        fmt.Printf("\n%sHigh-Value Transactions:%s\n", Yellow, Reset)
+        for _, tx := range highValueTxs {
+            fmt.Printf("- %s\n", tx)
+        }
+    }
 
-    // 4. Network Effect Analysis
-    fmt.Printf("%sNetwork Analysis:%s\n", Headers, Reset)
-    fmt.Printf("├─ Total Unique Addresses Interacted With: %d\n", len(repeatedAddresses))
-    fmt.Printf("└─ Top Recurring Interactions:\n")
-    
-    // Sort addresses by interaction count
-    type addressCount struct {
+    // 4. Network Analysis
+    fmt.Printf("\n%s4. Network Analysis%s\n", Headers, Reset)
+    var frequentInteractors []struct {
         address string
         count   int
+        volume  float64
     }
-    var sortedAddresses []addressCount
-    for addr, count := range repeatedAddresses {
-        if count > 1 { // Only show addresses with multiple interactions
-            sortedAddresses = append(sortedAddresses, addressCount{addr, count})
-        }
-    }
-    sort.Slice(sortedAddresses, func(i, j int) bool {
-        return sortedAddresses[i].count > sortedAddresses[j].count
-    })
     
-    // Show top 5 recurring addresses
-    for i, ac := range sortedAddresses {
-        if i >= 5 {
-            break
+    for addr, stats := range addressStats {
+        if addr == address {
+            continue
         }
-        fmt.Printf("    ├─ Address: %s (%d interactions)\n", ac.address[:8], ac.count)
+        if stats.totalTransactions > 2 {
+            frequentInteractors = append(frequentInteractors, struct {
+                address string
+                count   int
+                volume  float64
+            }{addr, stats.totalTransactions, stats.totalVolume})
+        }
     }
+
+    if len(frequentInteractors) > 0 {
+        fmt.Printf("\n%sFrequent Interactors:%s\n", Yellow, Reset)
+        for _, interactor := range frequentInteractors {
+            fmt.Printf("Address: %s\n", interactor.address)
+            fmt.Printf("  - Transaction Count: %d\n", interactor.count)
+            fmt.Printf("  - Total Volume: %.8f BTC\n", interactor.volume)
+        }
+    }
+
+
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+func formatAddresses(addresses []string, limit int) string {
+    if len(addresses) == 0 {
+        return "N/A"
+    }
+    
+    
+    var validAddresses []string
+    for _, addr := range addresses {
+        if addr != "" {
+            validAddresses = append(validAddresses, addr)
+        }
+    }
+    
+    if len(validAddresses) == 0 {
+        return "N/A"
+    }
+    
+    if len(validAddresses) <= limit {
+        return strings.Join(validAddresses, ", ")
+    }
+    
+    return fmt.Sprintf("%s (+%d)", 
+        strings.Join(validAddresses[:limit], ", "), 
+        len(validAddresses)-limit)
+}
+
+
+
+
+
+
 
 
 
@@ -430,6 +600,7 @@ func main() {
 
 	printWalletSummary(wallet,priceToday.Usd)
 
+	
 	//var wg sync.WaitGroup
 	txDetails := make(map[string]TransactionDetails)
 	//var txMutex sync.Mutex
@@ -437,14 +608,14 @@ func main() {
 	printTableHeader()
 
 	for _, tx := range wallet.Transactions {
-		// Fetch the transaction amount
+		
 		amount, err := getTransactionAmount(*address, tx.TxID)
 		if err != nil {
 			log.Printf("Error fetching transaction %s: %v", tx.TxID, err)
 			continue
 		}
 	
-		// Fetch the price
+		
 		price, err := GetPrice(int64(tx.Time))
 		if err != nil {
 			log.Printf("Error fetching price for transaction %s: %v", tx.TxID, err)
@@ -455,13 +626,47 @@ func main() {
 			}
 		}
 	
-		// Convert amount to BTC and store transaction details
+		
+		var originAddresses []string
+        for _, input := range tx.Inputs {
+            if input.PrevOut.Addr != "" {
+                originAddresses = append(originAddresses, input.PrevOut.Addr)
+            }
+        }
+		
+		
+		
+		var destAddresses []string
+        for _, output := range tx.Out {
+            if output.Addr != "" {
+                destAddresses = append(destAddresses, output.Addr)
+            }
+        }
+
+		
+
+
+		
 		btcAmount := float64(*amount) / 100_000_000
+
+		var displayOrigin, displayDest string
+		if btcAmount > 0 {
+			
+			displayOrigin = formatAddresses(originAddresses, 1)
+			displayDest = wallet.Address
+		} else {
+			
+			displayOrigin = wallet.Address
+			displayDest = formatAddresses(destAddresses, 1)
+		}
 		txDetails[tx.TxID] = TransactionDetails{
 			Amount:        btcAmount,
 			Price:         price.Usd,
 			Time:          time.Unix(int64(tx.Time), 0),
 			Confirmations: tx.Confirmations,
+			DisplayOrigin:   displayOrigin,
+            DisplayDest:     displayDest,
+		
 		}
 	}
 	
@@ -477,15 +682,17 @@ func main() {
 			color = Red
 		}
 	
-		fmt.Printf("║ %-20s │ %s%-15.8f%s │ %-12d │ $%-14.2f │ %-20s ║\n",
-			tx.TxID[:20],
-			color, details.Amount, Reset,
-			details.Confirmations,
-			details.Amount*details.Price,
-			details.Time.Format("2006-01-02 15:04:05"))
+		fmt.Printf("║ %-20s │ %s%-15.8f%s │ %-12d │ $%-14.2f │ %-20s │ %-30s │ %-30s ║\n",
+    tx.TxID[:20],
+    color, details.Amount, Reset,
+    details.Confirmations,
+    details.Amount*details.Price,
+    details.Time.Format("2006-01-02 15:04:05"),
+    details.DisplayOrigin,
+    details.DisplayDest)
 	}
 	
-	fmt.Printf("%s╚════════════════════════════════════════════════════════════════════════════════════════════════════════╝%s\n", Headers, Reset)
+	fmt.Printf("%s╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝%s\n", Headers, Reset)
 
 
 
