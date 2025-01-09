@@ -49,6 +49,9 @@ type HistoricalPrice struct {
 
 type Amount float64
 
+type Price struct {
+	Usd float64
+}
 
 
 type TransactionAnalysis struct {
@@ -158,7 +161,7 @@ func getMidnightTimestamp(timestamp int64) string {
 
 
 
-func GetPrice2(db *sql.DB, timestamp int64) (float64, error) {
+func GetPrice2(db *sql.DB, timestamp int64) (*HistoricalPrice, error) {
 	// Convert timestamp to a UTC time string in the same format as the database
 	midnight := getMidnightTimestamp(timestamp)
 
@@ -173,18 +176,22 @@ ORDER BY snapped_at DESC
 LIMIT 1;
 
     `
-	var price float64
-	err := db.QueryRow(query, midnight).Scan(&price)
+	var priceusd float64
+	err := db.QueryRow(query, midnight).Scan(&priceusd)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return 0, fmt.Errorf("no price found for the given timestamp")
+			return &HistoricalPrice{}, fmt.Errorf("no price found for the given timestamp")
 		}
-		return 0, err
+		return &HistoricalPrice{}, err
 	}
 
+	value := &HistoricalPrice{
+		Time: timestamp,
+		Usd:  priceusd,
+	}
    
 
-	return price, nil
+	return value, nil
 }
 
 
@@ -405,8 +412,15 @@ func main() {
     priceToday, err := GetPrice(int64(time.Now().Unix()))
     
     if err != nil {
-        fmt.Println("Error fetching the price today:", err)
-        return 
+        fmt.Println("Api Limit Exhausted local database will be used:", err)
+
+		priceToday,err = GetPrice2(db,int64(time.Now().Unix()))
+
+		if err != nil{
+ 
+			fmt.Println("error occured:",err)
+			return
+		}
     }
 
 	wallet, err := fetchWallet(*address)
@@ -416,54 +430,53 @@ func main() {
 
 	printWalletSummary(wallet,priceToday.Usd)
 
-	var wg sync.WaitGroup
+	//var wg sync.WaitGroup
 	txDetails := make(map[string]TransactionDetails)
-	var txMutex sync.Mutex
+	//var txMutex sync.Mutex
 
 	printTableHeader()
 
 	for _, tx := range wallet.Transactions {
-		wg.Add(1)
-		go func(tx Transaction) {
-			defer wg.Done() 
-
-			amount, err := getTransactionAmount(*address, tx.TxID)
+		// Fetch the transaction amount
+		amount, err := getTransactionAmount(*address, tx.TxID)
+		if err != nil {
+			log.Printf("Error fetching transaction %s: %v", tx.TxID, err)
+			continue
+		}
+	
+		// Fetch the price
+		price, err := GetPrice(int64(tx.Time))
+		if err != nil {
+			log.Printf("Error fetching price for transaction %s: %v", tx.TxID, err)
+			price, err = GetPrice2(db, int64(tx.Time))
 			if err != nil {
-				log.Printf("Error fetching transaction %s: %v", tx.TxID, err)
-				return
+				fmt.Printf("Error occurred while fetching fallback price for transaction %s: %v\n", tx.TxID, err)
+				continue
 			}
-
-			price, err := GetPrice2(db,int64(tx.Time))
-			if err != nil {
-				log.Printf("Error fetching price for transaction %s: %v", tx.TxID, err)
-				return
-			}
-
-			btcAmount := float64(*amount) / 100_000_000
-			txMutex.Lock()
-			txDetails[tx.TxID] = TransactionDetails{
-				Amount:        btcAmount,
-				Price:         price,
-				Time:          time.Unix(int64(tx.Time), 0),
-				Confirmations: tx.Confirmations,
-			}
-			txMutex.Unlock()
-		}(tx)
+		}
+	
+		// Convert amount to BTC and store transaction details
+		btcAmount := float64(*amount) / 100_000_000
+		txDetails[tx.TxID] = TransactionDetails{
+			Amount:        btcAmount,
+			Price:         price.Usd,
+			Time:          time.Unix(int64(tx.Time), 0),
+			Confirmations: tx.Confirmations,
+		}
 	}
-
-	wg.Wait()
-
+	
+	// Process and display the transaction details
 	for _, tx := range wallet.Transactions {
 		details, ok := txDetails[tx.TxID]
 		if !ok {
 			continue
 		}
-
+	
 		color := Green
 		if details.Amount < 0 {
 			color = Red
 		}
-
+	
 		fmt.Printf("║ %-20s │ %s%-15.8f%s │ %-12d │ $%-14.2f │ %-20s ║\n",
 			tx.TxID[:20],
 			color, details.Amount, Reset,
@@ -471,7 +484,7 @@ func main() {
 			details.Amount*details.Price,
 			details.Time.Format("2006-01-02 15:04:05"))
 	}
-
+	
 	fmt.Printf("%s╚════════════════════════════════════════════════════════════════════════════════════════════════════════╝%s\n", Headers, Reset)
 
 
