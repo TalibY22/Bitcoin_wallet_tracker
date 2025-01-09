@@ -2,7 +2,6 @@
 
 This Go-based Bitcoin Wallet Monitor fetches detailed information about a Bitcoin wallet's transactions and analyzes its patterns. It provides a detailed report on the wallet's current status, including:
 
-- Wallet balance and value in USD
 - Transaction details including amounts, origins, destinations, and timestamps
 - Analysis of unusual transaction patterns
 - Volume analysis and temporal patterns
@@ -21,7 +20,7 @@ This Go-based Bitcoin Wallet Monitor fetches detailed information about a Bitcoi
 - Detects suspicious patterns such as:
   - Unusual transaction volumes.
   - Frequent transactions within short time windows.
-- Fetch real-time price data from APIs (fallback to local database if API is rate-limited).
+- Fetch real-time price data from APIs (fallback to local database if API is rate is reached).
 - Generates detailed analysis and reports for security purposes.
 
 ## Prerequisites
