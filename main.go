@@ -101,7 +101,13 @@ var client = &http.Client{
 }
 
 
+var Suspiciouswallets []string
 
+
+
+//INside a for loop 
+
+//for every suspicious wallet search up the wallet
 
 
 
@@ -180,7 +186,11 @@ func GetPrice(timestamp int64) (*HistoricalPrice , error) {
 
 
 
+func Getsuswallets(){
 
+
+
+}
 
 
 
@@ -300,7 +310,7 @@ func analyzeTransactionPatterns(transactions []Transaction, address string, txDe
     unusualPatterns := make(map[string][]string)
 
     const (
-        RAPID_TX_WINDOW          = 1 * time.Hour
+        RAPID_TX_WINDOW          = 24 * time.Hour
         DORMANCY_PERIOD          = 30 * 24 * time.Hour
         HIGH_VALUE_THRESHOLD     = 1.0 
         UNUSUAL_VARIANCE_THRESHOLD = 2.0
@@ -413,6 +423,9 @@ func analyzeTransactionPatterns(transactions []Transaction, address string, txDe
 
         
         var avgTimeDiff float64
+
+
+
         if len(stats.timeDiffs) > 0 {
             for _, diff := range stats.timeDiffs {
                 avgTimeDiff += diff
@@ -422,7 +435,8 @@ func analyzeTransactionPatterns(transactions []Transaction, address string, txDe
             if avgTimeDiff < 1.0 && len(stats.timeDiffs) > 3 {
                 unusualPatterns[addr] = append(unusualPatterns[addr], 
                     "Unusually frequent transactions")
-            }
+            
+                }
         }
 
         
@@ -435,9 +449,20 @@ func analyzeTransactionPatterns(transactions []Transaction, address string, txDe
     }
 
     
+
+    //Get suspicious wallets from here 
+    
     if len(unusualPatterns) > 0 {
         fmt.Printf("\n%sDetected Suspicious Patterns:%s\n", Yellow, Reset)
         for addr, patterns := range unusualPatterns {
+            
+            
+            
+            //Append the suspicious wallets
+           // Suspiciouswallets =append(Suspiciouswallets,addr)
+        
+           
+           
             fmt.Printf("Address: %s\n", addr)
             for _, pattern := range patterns {
                 fmt.Printf("  - %s\n", pattern)
@@ -509,7 +534,9 @@ func analyzeTransactionPatterns(transactions []Transaction, address string, txDe
         if addr == address {
             continue
         }
-        if stats.totalTransactions > 2 {
+
+
+        if stats.totalTransactions > 4 {
             frequentInteractors = append(frequentInteractors, struct {
                 address string
                 count   int
@@ -715,4 +742,5 @@ func main() {
 
 
 	analyzeTransactionPatterns(wallet.Transactions,*address,txDetails)
+    fmt.Println(Suspiciouswallets)
 }
