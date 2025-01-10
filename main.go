@@ -285,52 +285,44 @@ func printWalletSummary(wallet *WalletResponse, currentPrice float64) {
 
 
 
-
-
-
-
-
 func analyzeTransactionPatterns(transactions []Transaction, address string, txDetails map[string]TransactionDetails) {
-    
     type AddressStats struct {
         totalTransactions int
-        totalVolume      float64
-        lastSeen         time.Time
-        transactionTypes map[string]int    
-        amounts          []float64         
-        timeDiffs        []float64         
+        totalVolume       float64
+        lastSeen          time.Time
+        transactionTypes  map[string]int
+        amounts           []float64
+        timeDiffs         []float64
+        dailyVolume       map[string]float64 
     }
 
     addressStats := make(map[string]AddressStats)
     unusualPatterns := make(map[string][]string)
-    
 
     const (
-        RAPID_TX_WINDOW    = 1 * time.Hour
-        DORMANCY_PERIOD    = 30 * 24 * time.Hour
-        HIGH_VALUE_THRESHOLD = 1.0 // in BTC
+        RAPID_TX_WINDOW          = 1 * time.Hour
+        DORMANCY_PERIOD          = 30 * 24 * time.Hour
+        HIGH_VALUE_THRESHOLD     = 1.0 
         UNUSUAL_VARIANCE_THRESHOLD = 2.0
+        TEMPORAL_SPAM_THRESHOLD   = 3.0  
     )
 
-    
     rapidTransactions := make(map[time.Time][]string)
     var lastTxTime time.Time
     var previousAmounts []float64
 
     fmt.Printf("\n%s=== Security Analysis Report ===%s\n\n", Headers, Reset)
 
-    
     for _, tx := range transactions {
         details := txDetails[tx.TxID]
         txTime := time.Unix(int64(tx.Time), 0)
-        
-       
+
         for _, input := range tx.Inputs {
             addr := input.PrevOut.Addr
             if addr == "" {
                 continue
             }
-            
+
             stats := addressStats[addr]
             stats.totalTransactions++
             stats.totalVolume += math.Abs(details.Amount)
@@ -340,12 +332,19 @@ func analyzeTransactionPatterns(transactions []Transaction, address string, txDe
             }
             stats.transactionTypes["out"]++
             stats.amounts = append(stats.amounts, math.Abs(details.Amount))
-            
+
             if len(stats.amounts) > 1 {
                 timeDiff := txTime.Sub(lastTxTime).Hours()
                 stats.timeDiffs = append(stats.timeDiffs, timeDiff)
             }
+
             
+            day := txTime.Format("2006-01-02")
+            if stats.dailyVolume == nil {
+                stats.dailyVolume = make(map[string]float64)
+            }
+            stats.dailyVolume[day] += math.Abs(details.Amount)
+
             addressStats[addr] = stats
         }
 
@@ -354,7 +353,7 @@ func analyzeTransactionPatterns(transactions []Transaction, address string, txDe
             if addr == "" {
                 continue
             }
-            
+
             stats := addressStats[addr]
             stats.totalTransactions++
             stats.totalVolume += math.Abs(details.Amount)
@@ -364,66 +363,73 @@ func analyzeTransactionPatterns(transactions []Transaction, address string, txDe
             }
             stats.transactionTypes["in"]++
             stats.amounts = append(stats.amounts, math.Abs(details.Amount))
-            
+
             addressStats[addr] = stats
         }
 
-        
         if !lastTxTime.IsZero() {
             timeDiff := txTime.Sub(lastTxTime)
             if timeDiff < RAPID_TX_WINDOW {
                 rapidTransactions[txTime] = append(rapidTransactions[txTime], tx.TxID)
             }
         }
-        
+
         lastTxTime = txTime
         previousAmounts = append(previousAmounts, math.Abs(details.Amount))
     }
 
-   
     fmt.Printf("%s1. Suspicious Pattern Detection%s\n", Headers, Reset)
 
-    // 1. Detect addresses with unusual transaction patterns
+    
     for addr, stats := range addressStats {
         if addr == address {
-            continue // Skip entered wallet address
+            continue 
         }
 
-        // Calculate transaction amount variance
+        
         var mean, variance float64
         for _, amount := range stats.amounts {
             mean += amount
         }
         mean /= float64(len(stats.amounts))
-        
+
         for _, amount := range stats.amounts {
             variance += math.Pow(amount-mean, 2)
         }
         variance /= float64(len(stats.amounts))
         stdDev := math.Sqrt(variance)
 
-        // Suspicious
+       
         if stdDev > UNUSUAL_VARIANCE_THRESHOLD && stats.totalTransactions > 3 {
             unusualPatterns[addr] = append(unusualPatterns[addr], 
                 fmt.Sprintf("High variance in transaction amounts (stdDev: %.2f BTC)", stdDev))
         }
 
+        
         if stats.totalVolume > HIGH_VALUE_THRESHOLD && stats.totalTransactions < 3 {
             unusualPatterns[addr] = append(unusualPatterns[addr], 
                 "High volume with few transactions")
         }
 
-        // Detect unusual timing patterns
+        
         var avgTimeDiff float64
         if len(stats.timeDiffs) > 0 {
             for _, diff := range stats.timeDiffs {
                 avgTimeDiff += diff
             }
             avgTimeDiff /= float64(len(stats.timeDiffs))
-            
+
             if avgTimeDiff < 1.0 && len(stats.timeDiffs) > 3 {
                 unusualPatterns[addr] = append(unusualPatterns[addr], 
                     "Unusually frequent transactions")
+            }
+        }
+
+        
+        for day, dailyVolume := range stats.dailyVolume {
+            if dailyVolume > HIGH_VALUE_THRESHOLD && len(stats.amounts) > TEMPORAL_SPAM_THRESHOLD {
+                unusualPatterns[addr] = append(unusualPatterns[addr], 
+                    fmt.Sprintf("High volume on %s, possibly suspicious activity", day))
             }
         }
     }
@@ -436,8 +442,8 @@ func analyzeTransactionPatterns(transactions []Transaction, address string, txDe
             for _, pattern := range patterns {
                 fmt.Printf("  - %s\n", pattern)
             }
+
             
-            // Print additional stats for suspicious addresses
             stats := addressStats[addr]
             fmt.Printf("  Statistics:\n")
             fmt.Printf("    - Total Transactions: %d\n", stats.totalTransactions)
@@ -448,7 +454,7 @@ func analyzeTransactionPatterns(transactions []Transaction, address string, txDe
         }
     }
 
-    // 2. Analyze Temporal Patterns NEEEEDDDDD TO BE REWORKED 
+    
     fmt.Printf("\n%s2. Temporal Analysis%s\n", Headers, Reset)
     if len(rapidTransactions) > 0 {
         fmt.Printf("\n%sRapid Transaction Sequences:%s\n", Yellow, Reset)
@@ -459,15 +465,23 @@ func analyzeTransactionPatterns(transactions []Transaction, address string, txDe
         }
     }
 
-    // 3. Volume Analysis
+    
     fmt.Printf("\n%s3. Volume Analysis%s\n", Headers, Reset)
     var highValueTxs []string
+    var spikeTransactions []string
+    var previousTxValue float64
     for _, tx := range transactions {
         details := txDetails[tx.TxID]
         if math.Abs(details.Amount) > HIGH_VALUE_THRESHOLD {
             highValueTxs = append(highValueTxs, fmt.Sprintf("TxID: %s, Amount: %.8f BTC", 
                 tx.TxID, math.Abs(details.Amount)))
         }
+
+        if previousTxValue != 0 && math.Abs(details.Amount) > previousTxValue * 1.5 {
+            spikeTransactions = append(spikeTransactions, fmt.Sprintf("TxID: %s, Amount: %.8f BTC (Spike)", 
+                tx.TxID, math.Abs(details.Amount)))
+        }
+        previousTxValue = math.Abs(details.Amount)
     }
     
     if len(highValueTxs) > 0 {
@@ -476,15 +490,21 @@ func analyzeTransactionPatterns(transactions []Transaction, address string, txDe
             fmt.Printf("- %s\n", tx)
         }
     }
+    if len(spikeTransactions) > 0 {
+        fmt.Printf("\n%sSpike Transactions:%s\n", Yellow, Reset)
+        for _, tx := range spikeTransactions {
+            fmt.Printf("- %s\n", tx)
+        }
+    }
 
-    // 4. Network Analysis
+    
     fmt.Printf("\n%s4. Network Analysis%s\n", Headers, Reset)
     var frequentInteractors []struct {
         address string
         count   int
         volume  float64
     }
-    
+
     for addr, stats := range addressStats {
         if addr == address {
             continue
@@ -506,10 +526,7 @@ func analyzeTransactionPatterns(transactions []Transaction, address string, txDe
             fmt.Printf("  - Total Volume: %.8f BTC\n", interactor.volume)
         }
     }
-
-
 }
-
 
 
 
@@ -600,7 +617,7 @@ func main() {
 
 	printWalletSummary(wallet,priceToday.Usd)
 
-	
+
 	//var wg sync.WaitGroup
 	txDetails := make(map[string]TransactionDetails)
 	//var txMutex sync.Mutex
