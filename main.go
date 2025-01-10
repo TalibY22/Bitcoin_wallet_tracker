@@ -97,7 +97,7 @@ type TransactionDetails struct {
 }
 
 var client = &http.Client{
-	Timeout: 10 * time.Second,
+	Timeout: 20 * time.Second,
 }
 
 
@@ -295,6 +295,19 @@ func printWalletSummary(wallet *WalletResponse, currentPrice float64) {
 
 
 
+
+
+//FUnc analyse pattern 2222
+
+
+
+
+
+
+
+
+
+//Need to study this              
 func analyzeTransactionPatterns(transactions []Transaction, address string, txDetails map[string]TransactionDetails) {
     type AddressStats struct {
         totalTransactions int
@@ -559,17 +572,6 @@ func analyzeTransactionPatterns(transactions []Transaction, address string, txDe
 
 
 
-
-
-
-
-
-
-
-
-
-
-
 func formatAddresses(addresses []string, limit int) string {
     if len(addresses) == 0 {
         return "N/A"
@@ -599,7 +601,247 @@ func formatAddresses(addresses []string, limit int) string {
 
 
 
+func analyzeWalletBehavior(transactions []Transaction, address string, txDetails map[string]TransactionDetails) {
+    // Analysis structures
+    type AddressInteraction struct {
+        totalVolume   float64
+        frequency     int
+        lastSeen      time.Time
+        firstSeen     time.Time
+        inVolume      float64
+        outVolume     float64
+        inCount       int
+        outCount      int
+        addresses     map[string]bool
+    }
 
+    // Initialize tracking maps
+    dailyActivity := make(map[string]float64)
+    monthlyActivity := make(map[string]float64)
+    addressInteractions := make(map[string]*AddressInteraction)
+    
+
+    const (
+        HIGH_VALUE_TX        = 1.0  // BTC
+        SUSPICIOUS_FREQUENCY = 10    // transactions per day
+        WHALE_THRESHOLD      = 5.0   // BTC
+        INACTIVE_PERIOD      = 30 * 24 * time.Hour
+        SATOSHI_TO_BTC      = 1e-8
+    )
+
+    var (
+        totalVolume          float64
+        maxDailyVolume      float64
+        maxDailyVolumeDate  string
+        maxTxValue          float64
+        maxTxID             string
+        maxTxTime           time.Time
+        uniqueCounterparties = make(map[string]bool)
+    )
+
+   //First loop
+    for _, tx := range transactions {
+        txTime := time.Unix(int64(tx.Time), 0)
+        dayKey := txTime.Format("2006-01-02")
+        monthKey := txTime.Format("2006-01")
+        
+        var txVolume float64
+        isOutgoing := false
+        var counterpartyAddresses []string
+
+        // Determine transaction direction and collect counterparties
+        for _, input := range tx.Inputs {
+            if input.PrevOut.Addr == address {
+                isOutgoing = true
+                txVolume = float64(input.PrevOut.Value) * SATOSHI_TO_BTC
+            } else if input.PrevOut.Addr != "" {
+                counterpartyAddresses = append(counterpartyAddresses, input.PrevOut.Addr)
+                uniqueCounterparties[input.PrevOut.Addr] = true
+            }
+        }
+
+        if !isOutgoing {
+            for _, output := range tx.Out {
+                if output.Addr == address {
+                    txVolume = float64(output.Value) * SATOSHI_TO_BTC
+                } else if output.Addr != "" {
+                    counterpartyAddresses = append(counterpartyAddresses, output.Addr)
+                    uniqueCounterparties[output.Addr] = true
+                }
+            }
+        }
+
+        // Update daily and monthly volumes
+        dailyActivity[dayKey] += txVolume
+        monthlyActivity[monthKey] += txVolume
+        
+        if dailyActivity[dayKey] > maxDailyVolume {
+            maxDailyVolume = dailyActivity[dayKey]
+            maxDailyVolumeDate = dayKey
+        }
+
+        if txVolume > maxTxValue {
+            maxTxValue = txVolume
+            maxTxID = tx.TxID
+            maxTxTime = txTime
+        }
+
+        // Update address interactions
+        for _, addr := range counterpartyAddresses {
+            if addr == "" || addr == address {
+                continue
+            }
+
+            if _, exists := addressInteractions[addr]; !exists {
+                addressInteractions[addr] = &AddressInteraction{
+                    firstSeen:  txTime,
+                    addresses:  make(map[string]bool),
+                }
+            }
+
+            interaction := addressInteractions[addr]
+            interaction.lastSeen = txTime
+            interaction.frequency++
+            
+            if isOutgoing {
+                interaction.outVolume += txVolume
+                interaction.outCount++
+            } else {
+                interaction.inVolume += txVolume
+                interaction.inCount++
+            }
+            
+            interaction.totalVolume += txVolume
+            interaction.addresses[addr] = true
+        }
+
+        totalVolume += txVolume
+    }
+
+    // Print comprehensive analysis
+    fmt.Printf("\n%s=== Comprehensive Wallet Analysis ===%s\n\n", Yellow, Reset)
+    
+    // Volume Analysis
+    fmt.Printf("%s1. Volume Statistics%s\n", Cyan, Reset)
+    fmt.Printf("- Total Volume: %.8f BTC\n", totalVolume)
+    fmt.Printf("- Highest Daily Volume: %.8f BTC on %s\n", maxDailyVolume, maxDailyVolumeDate)
+    fmt.Printf("- Largest Single Transaction: %.8f BTC (%s at %s)\n", 
+        maxTxValue, maxTxID, maxTxTime.Format("2006-01-02 15:04:05"))
+    fmt.Printf("- Average Transaction Size: %.8f BTC\n", totalVolume/float64(len(transactions)))
+    
+    // Temporal Analysis
+    fmt.Printf("\n%s2. Activity Patterns%s\n", Cyan, Reset)
+    activeHours := make(map[int]int)
+    for _, tx := range transactions {
+        hour := time.Unix(int64(tx.Time), 0).Hour()
+        activeHours[hour]++
+    }
+    
+    var mostActiveHour int
+    var maxHourlyTx int
+    for hour, count := range activeHours {
+        if count > maxHourlyTx {
+            mostActiveHour = hour
+            maxHourlyTx = count
+        }
+    }
+    fmt.Printf("- Most Active Hour: %02d:00 UTC (%d transactions)\n", mostActiveHour, maxHourlyTx)
+    
+    
+    fmt.Printf("\n%s3. Counterparty Analysis%s\n", Cyan, Reset)
+    fmt.Printf("- Total Unique Counterparties: %d\n", len(uniqueCounterparties))
+    
+    var frequentPartners []string
+    var highValuePartners []string
+    var suspiciousAddrs []string
+    
+    for addr, interaction := range addressInteractions {
+        timeDiff := interaction.lastSeen.Sub(interaction.firstSeen)
+        
+        // Identify frequent partners
+        if interaction.frequency >= 5 {
+            frequentPartners = append(frequentPartners, fmt.Sprintf(
+                "%s (%d transactions, %.8f BTC)", 
+                addr, interaction.frequency, interaction.totalVolume))
+        }
+        
+        // Identify high-value partners
+        if interaction.totalVolume >= WHALE_THRESHOLD {
+            highValuePartners = append(highValuePartners, fmt.Sprintf(
+                "%s (%.8f BTC)", addr, interaction.totalVolume))
+        }
+        
+        // Identify suspicious patterns
+        txPerHour := float64(interaction.frequency) / (timeDiff.Hours() + 1)
+        if txPerHour >= 5 {
+            suspiciousAddrs = append(suspiciousAddrs, fmt.Sprintf(
+                "%s (%d transactions in %s)", 
+                addr, interaction.frequency, timeDiff.String()))
+        }
+    }
+    
+    if len(frequentPartners) > 0 {
+        fmt.Printf("\n%sFrequent Transaction Partners:%s\n", Yellow, Reset)
+        for _, partner := range frequentPartners {
+            fmt.Printf("- %s\n", partner)
+        }
+    }
+    
+    if len(highValuePartners) > 0 {
+        fmt.Printf("\n%sHigh-Value Partners (>%.1f BTC):%s\n", Yellow, WHALE_THRESHOLD, Reset)
+        for _, partner := range highValuePartners {
+            fmt.Printf("- %s\n", partner)
+        }
+    }
+    
+    if len(suspiciousAddrs) > 0 {
+        fmt.Printf("\n%sPotentially Suspicious Activity:%s\n", Red, Reset)
+        for _, suspicious := range suspiciousAddrs {
+            fmt.Printf("- %s\n", suspicious)
+        }
+    }
+
+    // Usage Patterns
+    fmt.Printf("\n%s4. Usage Patterns%s\n", Cyan, Reset)
+    fmt.Printf("- Active Days: %d\n", len(dailyActivity))
+    fmt.Printf("- Active Months: %d\n", len(monthlyActivity))
+    fmt.Printf("- Average Daily Volume: %.8f BTC\n", totalVolume/float64(len(dailyActivity)))
+    fmt.Printf("- Transactions per Day: %.2f\n", float64(len(transactions))/float64(len(dailyActivity)))
+
+    // Risk Assessment
+    riskScore := 0
+    riskFactors := make([]string, 0)
+    
+    if len(suspiciousAddrs) > 0 {
+        riskScore++
+        riskFactors = append(riskFactors, "High frequency trading patterns detected")
+    }
+    if maxDailyVolume > WHALE_THRESHOLD {
+        riskScore++
+        riskFactors = append(riskFactors, "Large daily volume spikes")
+    }
+    if float64(len(transactions))/float64(len(dailyActivity)) > SUSPICIOUS_FREQUENCY {
+        riskScore++
+        riskFactors = append(riskFactors, "Unusually high transaction frequency")
+    }
+    
+    fmt.Printf("\n%s5. Risk Assessment%s\n", Headers, Reset)
+    switch {
+    case riskScore >= 2:
+        fmt.Printf("%sHIGH RISK - Multiple suspicious patterns detected%s\n", Red, Reset)
+    case riskScore == 1:
+        fmt.Printf("%sMEDIUM RISK - Some unusual patterns detected%s\n", Yellow, Reset)
+    default:
+        fmt.Printf("%sLOW RISK - No significant suspicious patterns detected%s\n", Green, Reset)
+    }
+    
+    if len(riskFactors) > 0 {
+        fmt.Printf("Risk factors identified:\n")
+        for _, factor := range riskFactors {
+            fmt.Printf("- %s\n", factor)
+        }
+    }
+}
 
 
 
@@ -741,6 +983,9 @@ func main() {
 
 
 
-	analyzeTransactionPatterns(wallet.Transactions,*address,txDetails)
+	//analyzeTransactionPatterns(wallet.Transactions,*address,txDetails)
+    analyzeWalletBehavior(wallet.Transactions,*address,txDetails)
+    
+    
     fmt.Println(Suspiciouswallets)
 }
